@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --env-file .env src/server.ts",
+    "studio": "bunx --bun prisma studio --port 5555",
     "etl:day": "bun run --env-file .env src/etl/run_day.ts",
     "etl:daily": "bun run --env-file .env src/etl/run_daily.ts",
     "migrate": "bun run --env-file .env src/db/migrate.ts",
@@ -17,12 +18,14 @@
     "format": "bash -c 'prettier -w . || true'"
   },
   "dependencies": {
+    "@prisma/client": "^6.18.0",
     "pg": "^8.12.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
     "@types/pg": "^8.11.6",
     "bun-types": "^1.3.1",
+    "prisma": "^6.18.0",
     "typescript": "^5.6.3"
   }
 }

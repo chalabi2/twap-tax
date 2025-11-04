@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model IngestedFile {
+  s3Key      String    @id @map("s3_key")
+  etag       String?
+  ingestedAt DateTime? @default(now()) @map("ingested_at") @db.Timestamptz(6)
+
+  @@map("ingested_files")
+}
+
+model Fill {
+  id            BigInt    @id @default(autoincrement())
+  s3Key         String    @map("s3_key")
+  sourceLine    Int       @map("source_line")
+  blockNum      BigInt?   @map("block_num")
+  txHash        String?   @map("tx_hash")
+  ts            DateTime? @db.Timestamptz(6)
+  wallet        String?
+  asset         String?
+  side          String?
+  price         Decimal?  @db.Decimal
+  size          Decimal?  @db.Decimal
+  twapId        String?   @map("twap_id")
+  raw           Json
+  itemIdx       Int       @default(0) @map("item_idx")
+  closedPnl     Decimal?  @map("closed_pnl") @db.Decimal
+  fee           Decimal?  @db.Decimal
+  feeToken      String?   @map("fee_token")
+  dir           String?
+  builder       String?
+  oid           BigInt?
+  tid           BigInt?
+  cloid         String?
+  startPosition Decimal?  @map("start_position") @db.Decimal
+  crossed       Boolean?
+
+  @@unique([s3Key, sourceLine, itemIdx], map: "fills_s3_line_item_uniq")
+  @@index([wallet, ts], map: "idx_fills_wallet_ts")
+  @@index([twapId], map: "idx_fills_twap")
+  @@index([asset, ts], map: "idx_fills_asset_ts")
+  @@map("fills")
+}
