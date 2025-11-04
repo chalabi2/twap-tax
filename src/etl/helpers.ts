@@ -63,8 +63,8 @@ export async function decompressLz4Recursive(dir: string): Promise<void> {
   const lz4Files = files.filter((f) => f.endsWith(".lz4"));
   for (const f of lz4Files) {
     const unlz4Bin = process.env["UNLZ4_PATH"] ?? "unlz4";
-    // -f to overwrite existing decompressed target without interactive prompt
-    const { code, stderr } = await execCmd(unlz4Bin, ["-f", "--rm", f]);
+    const outFile = f.replace(/\.lz4$/, "");
+    const { code, stderr } = await execCmd(unlz4Bin, ["-f", "-d", f, outFile]);
     if (code !== 0) {
       throw new Error(`unlz4 failed for ${f}: ${stderr}`);
     }
