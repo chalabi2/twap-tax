@@ -347,7 +347,7 @@ const server = Bun.serve({
   },
 });
 
-console.log(`API listening on http://localhost:${server.port}`);
+console.log(`API listening on http://${server.hostname}:${server.port}`);
 
 process.on("SIGINT", async () => {
   await dbPool.end();
