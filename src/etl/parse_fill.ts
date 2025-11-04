@@ -96,7 +96,7 @@ export function parseFillRecord(raw: unknown): ParsedFill {
     toNumber((r as any)?.fill?.sz) ||
     toNumber((r as any)?.fill?.size);
 
-  const twapId =
+  let twapId =
     toString(r["twapId"]) ||
     toString(r["parentOrderId"]) ||
     toString(r["oidParent"]) ||
@@ -124,6 +124,7 @@ export function parseFillRecord(raw: unknown): ParsedFill {
   const startPosition = toNumber(r["startPosition"]) ?? null;
   const crossed = typeof r["crossed"] === "boolean" ? (r["crossed"] as boolean) : null;
 
+  if (!twapId && orderId != null) twapId = String(orderId);
   return { blockNum, txHash, ts, wallet, asset, side, price, size, twapId, closedPnl, fee, feeToken, dir, builder, orderId, tid, cloid, startPosition, crossed };
 }
 

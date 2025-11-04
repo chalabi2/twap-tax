@@ -21,6 +21,27 @@ function badRequest(message: string): Response {
   return json({ status: 400, body: { error: message } });
 }
 
+function forbidden(): Response {
+  return new Response(JSON.stringify({ error: "Forbidden" }), {
+    status: 403,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function requireApiKey(req: Request): Response | null {
+  const required = process.env["API_KEY"];
+  if (!required) return null;
+  const key = req.headers.get("X-API-Key");
+  if (!key || key !== required) return forbidden();
+  return null;
+}
+
+function parseDate(val?: string | null): Date | null {
+  if (!val) return null;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 async function handleHealth(): Promise<Response> {
   try {
     await withClient(async (c) => c.query("select 1"));
@@ -32,12 +53,12 @@ async function handleHealth(): Promise<Response> {
 
 async function handleTwaps(url: URL): Promise<Response> {
   const q = parseQuery(url);
-  const wallet = q.wallet;
-  const asset = q.asset;
-  const includeUngrouped = q.includeUngrouped === "1";
-  const start = q.start ? new Date(q.start) : null;
-  const end = q.end ? new Date(q.end) : null;
-  if ((q.start && !start) || (q.end && !end)) return badRequest("Invalid start/end");
+  const wallet = q["wallet"];
+  const asset = q["asset"];
+  const includeUngrouped = q["includeUngrouped"] === "1";
+  const start = q["start"] ? new Date(q["start"]) : null;
+  const end = q["end"] ? new Date(q["end"]) : null;
+  if ((q["start"] && !start) || (q["end"] && !end)) return badRequest("Invalid start/end");
 
   const params: any[] = [];
   const where: string[] = [];
@@ -169,6 +190,148 @@ const server = Bun.serve({
   port: Number(process.env["PORT"] ?? 3000),
   fetch: async (req) => {
     const url = new URL(req.url);
+    if (url.pathname === "/trades") {
+      const authErr = requireApiKey(req);
+      if (authErr) return authErr;
+      const q = parseQuery(url);
+      const walletsParam = q["wallet_addresses"];
+      const asset = q["asset"];
+      const twapId = q["twap_id"];
+      const start = parseDate(q["start_date"]);
+      const end = parseDate(q["end_date"]);
+      let limit = q["limit"] ? Number(q["limit"]) : 100;
+      if (!Number.isFinite(limit) || limit < 1) limit = 1;
+      if (limit > 1000) limit = 1000;
+      let offset = q["offset"] ? Number(q["offset"]) : 0;
+      if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+      const where: string[] = [];
+      const params: any[] = [];
+      if (walletsParam) {
+        const ws = walletsParam.split(",").map((w) => w.trim()).filter(Boolean);
+        if (ws.length) {
+          params.push(ws);
+          where.push(`wallet = any($${params.length})`);
+        }
+      }
+      if (asset) {
+        params.push(asset);
+        where.push(`asset = $${params.length}`);
+      }
+      if (twapId) {
+        params.push(twapId);
+        where.push(`twap_id = $${params.length}`);
+      }
+      if (start) {
+        params.push(start.toISOString());
+        where.push(`ts >= $${params.length}`);
+      }
+      if (end) {
+        params.push(end.toISOString());
+        where.push(`ts <= $${params.length}`);
+      }
+      const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+      params.push(limit, offset);
+      const rows = await withClient(async (c) => {
+        const { rows } = await c.query(
+          `select id, twap_id, wallet, ts, asset, size, price, side, fee
+           from fills
+           ${whereSql}
+           order by ts asc
+           limit $${params.length - 1} offset $${params.length}`,
+          params,
+        );
+        return rows as any[];
+      });
+      const out = rows.map((r: any) => ({
+        id: Number(r.id),
+        twap_id: r.twap_id,
+        wallet_address: r.wallet,
+        timestamp: r.ts,
+        asset: r.asset,
+        quantity: r.size != null ? Number(r.size) : null,
+        price: r.price != null ? Number(r.price) : null,
+        side: r.side === "B" ? "buy" : r.side === "A" ? "sell" : r.side,
+        fee: r.fee != null ? Number(r.fee) : null,
+        exchange: "hyperliquid",
+      }));
+      return json({ body: out });
+    }
+    if (url.pathname.startsWith("/twap/")) {
+      const authErr = requireApiKey(req);
+      if (authErr) return authErr;
+      const id = url.pathname.split("/")[2] ?? "";
+      if (!id) return badRequest("Missing twap_id");
+      const rows = await withClient(async (c) => {
+        const { rows } = await c.query(
+          `select id, twap_id, wallet, ts, asset, size, price, side, fee from fills where twap_id = $1 order by ts asc`,
+          [id],
+        );
+        return rows as any[];
+      });
+      if (!rows.length) return json({ status: 404, body: { error: "Not found" } });
+      const sizes = rows.map((r: any) => (r.size != null ? Number(r.size) : 0));
+      const prices = rows.map((r: any) => (r.price != null ? Number(r.price) : 0));
+      const vol = sizes.reduce((a, b) => a + b, 0);
+      const vwSum = rows.reduce((a: number, r: any, i: number) => a + (sizes[i] || 0) * (prices[i] || 0), 0);
+      const avgPrice = vol > 0 ? vwSum / vol : null;
+      const trades = rows.map((r: any) => ({
+        id: Number(r.id),
+        twap_id: r.twap_id,
+        wallet_address: r.wallet,
+        timestamp: r.ts,
+        asset: r.asset,
+        quantity: r.size != null ? Number(r.size) : null,
+        price: r.price != null ? Number(r.price) : null,
+        side: r.side === "B" ? "buy" : r.side === "A" ? "sell" : r.side,
+        fee: r.fee != null ? Number(r.fee) : null,
+        exchange: "hyperliquid",
+      }));
+      return json({ body: { twap_id: id, total_trades: rows.length, total_volume: vol, avg_price: avgPrice, trades } });
+    }
+    if (url.pathname.startsWith("/wallets/") && url.pathname.endsWith("/twaps")) {
+      const authErr = requireApiKey(req);
+      if (authErr) return authErr;
+      const parts = url.pathname.split("/");
+      const wallet = parts[2] ?? "";
+      if (!wallet) return badRequest("Missing wallet_address");
+      const q = parseQuery(url);
+      const start = parseDate(q["start_date"]);
+      const end = parseDate(q["end_date"]);
+      const params: any[] = [wallet];
+      const where: string[] = ["wallet = $1", "twap_id is not null"];
+      if (start) {
+        params.push(start.toISOString());
+        where.push(`ts >= $${params.length}`);
+      }
+      if (end) {
+        params.push(end.toISOString());
+        where.push(`ts <= $${params.length}`);
+      }
+      const rows = await withClient(async (c) => {
+        const { rows } = await c.query(
+          `select distinct twap_id from fills where ${where.join(" and ")} order by twap_id asc`,
+          params,
+        );
+        return rows as any[];
+      });
+      return json({ body: rows.map((r: any) => r.twap_id) });
+    }
+    if (url.pathname === "/status") {
+      const authErr = requireApiKey(req);
+      if (authErr) return authErr;
+      const status = await withClient(async (c) => {
+        const lastIngest = await c.query(`select max(ingested_at) as ts from ingested_files`);
+        const total = await c.query(`select count(*)::bigint as cnt from fills`);
+        return {
+          last_ingestion: lastIngest.rows[0]?.ts || null,
+          total_records: Number(total.rows[0]?.cnt || 0),
+          status: Number(total.rows[0]?.cnt || 0) > 0 ? "success" : "no_data",
+          last_error: null,
+        };
+      });
+      return json({ body: status });
+    }
     if (url.pathname === "/healthz") return handleHealth();
     if (url.pathname === "/twaps") return handleTwaps(url);
     if (url.pathname.startsWith("/twaps/")) {

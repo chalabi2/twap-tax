@@ -1,5 +1,5 @@
 import { basename, relative } from "path";
-import { listFilesRecursive, makeTempDir, awsS3CpRecursive, decompressLz4Recursive, awsS3HasAny } from "./helpers";
+import { listFilesRecursive, makeTempDir, awsS3CpRecursive, decompressLz4Recursive, awsS3HasAny, awsS3List, awsS3CpObject } from "./helpers";
 import { ingestLocalFile } from "./ingest_file";
 import { withClient } from "../db/client";
 
@@ -24,33 +24,43 @@ async function run(): Promise<void> {
   if (!(await awsS3HasAny(cand1, payer))) {
     if (await awsS3HasAny(cand2, payer)) s3Prefix = cand2;
   }
-  console.log(`Syncing ${s3Prefix} -> ${tmp}`);
-  await awsS3CpRecursive(s3Prefix, tmp, payer);
+  // New: list objects and fetch per object with limits
+  const objects = await awsS3List(s3Prefix, payer);
+  const maxBlocks = Number(process.env["MAX_BLOCKS"] ?? 0);
+  const selected = maxBlocks > 0 ? objects.slice(0, maxBlocks) : objects;
+  console.log(`Found ${selected.length} files to ingest for ${isoDay}`);
 
-  console.log("Decompressing .lz4 files if any...");
-  await decompressLz4Recursive(tmp);
-
-  const files = await listFilesRecursive(tmp);
-  console.log(`Found ${files.length} files to ingest for ${isoDay}`);
-
-  // Insert watermark for each file after ingest completes
   let totalInserted = 0;
-  for (const f of files) {
-    const keyGuess = `${yyyymmdd}/${basename(f)}`;
-    const already = await withClient(async (c) => {
-      const { rows } = await c.query("select 1 from ingested_files where s3_key = $1", [keyGuess]);
-      return rows.length > 0;
-    });
-    if (already) {
-      continue;
+  const concurrency = Number(process.env["INGEST_CONCURRENCY"] ?? 4);
+  let idx = 0;
+  async function worker() {
+    while (idx < selected.length) {
+      const i = idx++;
+      const name = selected[i];
+      const s3Key = `${s3Prefix}${name}`;
+      const keyGuess = `hourly/${yyyymmdd}/${name}`;
+      const already = await withClient(async (c) => {
+        const { rows } = await c.query("select 1 from ingested_files where s3_key = $1", [keyGuess]);
+        return rows.length > 0;
+      });
+      if (already) continue;
+      try {
+        const localLz4 = `${tmp}/${name}`;
+        await awsS3CpObject(s3Key, localLz4, payer);
+        await decompressLz4Recursive(tmp);
+        const localRaw = localLz4.replace(/\.lz4$/, "");
+        const { inserted } = await ingestLocalFile(localRaw, keyGuess);
+        totalInserted += inserted;
+        await withClient(async (c) => {
+          await c.query("insert into ingested_files (s3_key, etag) values ($1, $2) on conflict do nothing", [keyGuess, null]);
+        });
+      } catch (e) {
+        console.error(`Failed ingest for ${s3Key}:`, e);
+      }
     }
-    const { inserted } = await ingestLocalFile(f, keyGuess);
-    totalInserted += inserted;
-    await withClient(async (c) => {
-      await c.query("insert into ingested_files (s3_key, etag) values ($1, $2) on conflict do nothing", [keyGuess, null]);
-    });
   }
-
+  const workers = Array.from({ length: Math.max(1, concurrency) }, () => worker());
+  await Promise.all(workers);
   console.log(`Inserted ${totalInserted} fills for ${isoDay}`);
 }
 

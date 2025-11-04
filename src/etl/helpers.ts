@@ -39,12 +39,32 @@ export async function awsS3HasAny(s3Prefix: string, requestPayer = "requester"):
   return stdout.trim().length > 0;
 }
 
+export async function awsS3List(s3Prefix: string, requestPayer = "requester"): Promise<string[]> {
+  const awsBin = process.env["AWS_CLI_PATH"] ?? "aws";
+  const { code, stdout } = await execCmd(awsBin, ["s3", "ls", s3Prefix, "--request-payer", requestPayer]);
+  if (code !== 0) return [];
+  // lines like: 2025-11-01 05:02:41   13536809 10.lz4
+  return stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length && !l.endsWith("/"))
+    .map((l) => l.split(/\s+/).pop() as string)
+    .filter(Boolean);
+}
+
+export async function awsS3CpObject(fullKey: string, destPath: string, requestPayer = "requester"): Promise<void> {
+  const awsBin = process.env["AWS_CLI_PATH"] ?? "aws";
+  const { code, stderr } = await execCmd(awsBin, ["s3", "cp", fullKey, destPath, "--request-payer", requestPayer]);
+  if (code !== 0) throw new Error(`aws s3 cp object failed: ${stderr}`);
+}
+
 export async function decompressLz4Recursive(dir: string): Promise<void> {
   const files = await listFilesRecursive(dir);
   const lz4Files = files.filter((f) => f.endsWith(".lz4"));
   for (const f of lz4Files) {
     const unlz4Bin = process.env["UNLZ4_PATH"] ?? "unlz4";
-    const { code, stderr } = await execCmd(unlz4Bin, ["--rm", f]);
+    // -f to overwrite existing decompressed target without interactive prompt
+    const { code, stderr } = await execCmd(unlz4Bin, ["-f", "--rm", f]);
     if (code !== 0) {
       throw new Error(`unlz4 failed for ${f}: ${stderr}`);
     }

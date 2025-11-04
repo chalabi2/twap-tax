@@ -16,6 +16,7 @@ export async function ingestLocalFile(fullPath: string, s3KeyGuess: string): Pro
   const rl = readline.createInterface({ input: createReadStream(fullPath), crlfDelay: Infinity });
   let lineNo = 0;
   let inserted = 0;
+  const rows: any[][] = [];
   for await (const line of rl) {
     const trimmed = line.trim();
     if (trimmed === "") continue;
@@ -55,53 +56,54 @@ export async function ingestLocalFile(fullPath: string, s3KeyGuess: string): Pro
         // Require at least timestamp and price/size or wallet to avoid writing non-fill wrappers
         const hasSignal = !!(parsed.wallet || parsed.price || parsed.size || parsed.asset || parsed.ts);
         if (!hasSignal) continue;
-        await withClient(async (c) => {
-          await c.query(
-            `insert into fills (
-               s3_key, source_line, item_idx,
-               block_num, tx_hash, ts, wallet, asset, side, price, size, twap_id,
-               closed_pnl, fee, fee_token, dir, builder, oid, tid, cloid, start_position, crossed,
-               raw
-             ) values (
-               $1,$2,$3,
-               $4,$5,$6,$7,$8,$9,$10,$11,$12,
-               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-               $23
-            ) on conflict (s3_key, source_line, item_idx) do nothing`,
-            [
-              s3KeyGuess,
-              lineNo,
-              idx,
-              parsed.blockNum,
-              parsed.txHash,
-              parsed.ts ? parsed.ts.toISOString() : null,
-              parsed.wallet,
-              parsed.asset,
-              parsed.side,
-              parsed.price,
-              parsed.size,
-              parsed.twapId,
-              parsed.closedPnl,
-              parsed.fee,
-              parsed.feeToken,
-              parsed.dir,
-              parsed.builder,
-              parsed.orderId,
-              parsed.tid,
-              parsed.cloid,
-              parsed.startPosition,
-              parsed.crossed,
-              JSON.stringify(item),
-            ],
-          );
-          inserted += 1;
-        });
+        rows.push([
+          s3KeyGuess,
+          lineNo,
+          idx,
+          parsed.blockNum,
+          parsed.txHash,
+          parsed.ts ? parsed.ts.toISOString() : null,
+          parsed.wallet,
+          parsed.asset,
+          parsed.side,
+          parsed.price,
+          parsed.size,
+          parsed.twapId,
+          parsed.closedPnl,
+          parsed.fee,
+          parsed.feeToken,
+          parsed.dir,
+          parsed.builder,
+          parsed.orderId,
+          parsed.tid,
+          parsed.cloid,
+          parsed.startPosition,
+          parsed.crossed,
+          JSON.stringify(item),
+        ]);
         idx += 1;
       }
     } catch (e) {
       // Skip malformed lines
       continue;
     }
+  }
+  if (rows.length > 0) {
+    const chunkSize = Number(process.env["BULK_INSERT_CHUNK_SIZE"] ?? 1000);
+    await withClient(async (c) => {
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const batch = rows.slice(i, i + chunkSize);
+        const cols = [
+          "s3_key","source_line","item_idx","block_num","tx_hash","ts","wallet","asset","side","price","size","twap_id",
+          "closed_pnl","fee","fee_token","dir","builder","oid","tid","cloid","start_position","crossed","raw"
+        ];
+        const valuesSql = batch.map((_, bi) => `(${cols.map((__, cj) => `$${bi * cols.length + cj + 1}`).join(",")})`).join(",");
+        const flatParams = batch.flat();
+        const sql = `insert into fills (${cols.join(",")}) values ${valuesSql} on conflict (s3_key, source_line, item_idx) do nothing`;
+        await c.query(sql, flatParams as any);
+        inserted += batch.length;
+      }
+    });
   }
   return { lines: lineNo, inserted };
 }
