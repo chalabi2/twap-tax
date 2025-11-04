@@ -188,6 +188,7 @@ async function handleTwapById(id: string): Promise<Response> {
 
 const server = Bun.serve({
   port: Number(process.env["PORT"] ?? 3000),
+  hostname: process.env["HOST"] ?? "0.0.0.0",
   fetch: async (req) => {
     const url = new URL(req.url);
     if (url.pathname === "/trades") {

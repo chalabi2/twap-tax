@@ -1,0 +1,19 @@
+[Unit]
+Description=TWAP Tax API Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/twap-tax
+EnvironmentFile=/path/to/twap-tax/.env
+ExecStart=/usr/bin/env bun run dist/server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=twap-tax-api
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,14 @@
+[Unit]
+Description=TWAP Tax ETL Daily Job
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=YOUR_USER
+WorkingDirectory=/path/to/twap-tax
+EnvironmentFile=/path/to/twap-tax/.env
+ExecStart=/usr/bin/env bun run dist/etl/run_daily.js
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=twap-tax-etl
+

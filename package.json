@@ -8,7 +8,7 @@
     "studio": "bunx --bun prisma studio --port 5555",
     "etl:day": "bun run --env-file .env src/etl/run_day.ts",
     "etl:daily": "bun run --env-file .env src/etl/run_daily.ts",
-    "etl:backfill": "bun run --env-file .env src/etl/backfill_180.ts",
+    "etl:backfill": "bun run --env-file .env src/etl/backfill.ts",
     "migrate": "bun run --env-file .env src/db/migrate.ts",
     "build": "bun run build:api && bun run build:etl",
     "build:api": "bun build --target bun ./src/server.ts --outdir dist",

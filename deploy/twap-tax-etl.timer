@@ -1,0 +1,12 @@
+[Unit]
+Description=TWAP Tax ETL Daily Timer
+Requires=twap-tax-etl.service
+
+[Timer]
+OnCalendar=daily
+OnCalendar=02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
