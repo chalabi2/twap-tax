@@ -71,7 +71,38 @@ bun run etl:daily
 
 **Authentication:** Set `API_KEY` in `.env` to require `X-API-Key` header. If not set, all endpoints are public.
 
-All list endpoints are paginated (max 100 per page).
+### Pagination
+
+All list endpoints support pagination with the following query parameters:
+
+- `limit` - Results per page (default: 100, max: 100)
+- `offset` - Number of results to skip (default: 0)
+- `include_total` - Set to `1` or `true` to include total count (optional, slower)
+
+**Pagination response fields:**
+
+- `limit` - Requested page size
+- `offset` - Current offset
+- `current_page` - Current page number (1-indexed)
+- `returned` - Number of items in current response
+- `has_more` - Whether more results exist
+- `next_offset` - Offset for next page (null if no more results)
+- `prev_offset` - Offset for previous page (null if on first page)
+- `total` - Total count (only if `include_total=1`)
+- `total_pages` - Total pages (only if `include_total=1`)
+
+**Navigation examples:**
+
+```bash
+# First page
+curl '.../trades?limit=50'
+
+# Next page
+curl '.../trades?limit=50&offset=50'
+
+# With total count (slower)
+curl '.../trades?limit=50&include_total=1'
+```
 
 ### GET /trades
 
@@ -109,7 +140,11 @@ curl 'https://twap-backend.jchalabi.xyz/trades?wallet_addresses=0xabc,0xdef&asse
   "pagination": {
     "limit": 50,
     "offset": 0,
-    "has_more": true
+    "current_page": 1,
+    "returned": 50,
+    "has_more": true,
+    "next_offset": 50,
+    "prev_offset": null
   }
 }
 ```
@@ -159,7 +194,15 @@ curl -H "X-API-Key: xxx" \
       ]
     }
   ],
-  "pagination": { "limit": 10, "offset": 0, "has_more": true }
+  "pagination": {
+    "limit": 10,
+    "offset": 0,
+    "current_page": 1,
+    "returned": 10,
+    "has_more": true,
+    "next_offset": 10,
+    "prev_offset": null
+  }
 }
 ```
 

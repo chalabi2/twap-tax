@@ -168,13 +168,39 @@ async function handleTwaps(url: URL): Promise<Response> {
     };
   }).filter(Boolean);
 
+  const includeTotalParam = q["include_total"];
+  const includeTotal = includeTotalParam === "1" || includeTotalParam === "true";
+  let total: number | undefined;
+  if (includeTotal) {
+    total = await withClient(async (c) => {
+      const countParams = params.slice(0, -2);
+      const { rows } = await c.query(
+        `select count(distinct twap_id) as cnt from fills ${whereSql}`,
+        countParams,
+      );
+      return Number(rows[0].cnt);
+    });
+  }
+
+  const currentPage = Math.floor(offset / limit) + 1;
+  const nextOffset = hasMore ? offset + limit : null;
+  const prevOffset = offset > 0 ? Math.max(0, offset - limit) : null;
+
   return json({
     body: {
       data: out,
       pagination: {
         limit,
         offset,
+        current_page: currentPage,
+        returned: out.length,
         has_more: hasMore,
+        next_offset: nextOffset,
+        prev_offset: prevOffset,
+        ...(total !== undefined && {
+          total,
+          total_pages: Math.ceil(total / limit),
+        }),
       },
     },
   });
@@ -291,13 +317,39 @@ const server = Bun.serve({
         fee: r.fee != null ? Number(r.fee) : null,
         exchange: "hyperliquid",
       }));
+      const includeTotalParam = q["include_total"];
+      const includeTotal = includeTotalParam === "1" || includeTotalParam === "true";
+      let total: number | undefined;
+      if (includeTotal) {
+        total = await withClient(async (c) => {
+          const countParams = params.slice(0, -2);
+          const { rows } = await c.query(
+            `select count(*) as cnt from fills ${whereSql}`,
+            countParams,
+          );
+          return Number(rows[0].cnt);
+        });
+      }
+
+      const currentPage = Math.floor(offset / limit) + 1;
+      const nextOffset = hasMore ? offset + limit : null;
+      const prevOffset = offset > 0 ? Math.max(0, offset - limit) : null;
+
       return json({
         body: {
           data: out,
           pagination: {
             limit,
             offset,
+            current_page: currentPage,
+            returned: out.length,
             has_more: hasMore,
+            next_offset: nextOffset,
+            prev_offset: prevOffset,
+            ...(total !== undefined && {
+              total,
+              total_pages: Math.ceil(total / limit),
+            }),
           },
         },
       });
