@@ -112,11 +112,11 @@ curl 'https://twap-backend.jchalabi.xyz/trades?wallet_addresses=0xabc,0xdef&asse
 
 ### GET /twaps
 
-Get TWAPs grouped by `twap_id` with aggregated stats.
+Get TWAPs with aggregated stats (paginated at TWAP level, not fill level).
 
 ```bash
 curl -H "X-API-Key: xxx" \
-  'http://localhost:3000/twaps?wallet=0x5b5d51203a0f9079f8aeb098a6523a13f298c060&asset=ETH'
+  'http://localhost:3000/twaps?wallet=0x5b5d51203a0f9079f8aeb098a6523a13f298c060&limit=10'
 ```
 
 **Query params:**
@@ -125,8 +125,8 @@ curl -H "X-API-Key: xxx" \
 - `asset` - Filter by asset symbol
 - `start` - Start date (ISO 8601)
 - `end` - End date (ISO 8601)
-- `includeUngrouped` - Set to `1` to include fills without a `twap_id` (default: `0`, excludes non-TWAP fills)
-- `limit`, `offset` - Pagination
+- `limit` - TWAPs per page (max 100, default 100)
+- `offset` - Page offset
 
 **Response:**
 
@@ -155,7 +155,7 @@ curl -H "X-API-Key: xxx" \
       ]
     }
   ],
-  "pagination": { "limit": 100, "offset": 0, "has_more": false }
+  "pagination": { "limit": 10, "offset": 0, "has_more": true }
 }
 ```
 

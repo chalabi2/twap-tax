@@ -35,6 +35,10 @@ create table if not exists fills (
 create index if not exists idx_fills_wallet_ts on fills (wallet, ts);
 create index if not exists idx_fills_twap on fills (twap_id);
 create index if not exists idx_fills_asset_ts on fills (asset, ts);
+create index if not exists idx_fills_wallet_twap on fills (wallet, twap_id) where twap_id is not null;
+create index if not exists idx_fills_ts on fills (ts);
+create index if not exists idx_fills_wallet_asset_ts on fills (wallet, asset, ts);
+create index if not exists idx_fills_id_ts on fills (id, ts);
 
 -- Backfill-safe alters for existing deployments
 alter table if exists fills add column if not exists item_idx integer not null default 0;

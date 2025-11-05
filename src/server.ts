@@ -55,7 +55,6 @@ async function handleTwaps(url: URL): Promise<Response> {
   const q = parseQuery(url);
   const wallet = q["wallet"];
   const asset = q["asset"];
-  const includeUngrouped = q["includeUngrouped"] === "1";
   const start = q["start"] ? new Date(q["start"]) : null;
   const end = q["end"] ? new Date(q["end"]) : null;
   let limit = q["limit"] ? Number(q["limit"]) : 100;
@@ -66,7 +65,7 @@ async function handleTwaps(url: URL): Promise<Response> {
   if ((q["start"] && !start) || (q["end"] && !end)) return badRequest("Invalid start/end");
 
   const params: any[] = [];
-  const where: string[] = [];
+  const where: string[] = ["twap_id is not null"];
   if (wallet) {
     params.push(wallet);
     where.push(`wallet = $${params.length}`);
@@ -83,28 +82,42 @@ async function handleTwaps(url: URL): Promise<Response> {
     params.push(end.toISOString());
     where.push(`ts <= $${params.length}`);
   }
-  if (!includeUngrouped) {
-    where.push("twap_id is not null");
-  }
-  const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+  const whereSql = `where ${where.join(" and ")}`;
   params.push(limit + 1, offset);
 
-  const rows = await withClient(async (c) => {
+  const twapIds = await withClient(async (c) => {
     const { rows } = await c.query(
-      `select twap_id, wallet, asset, ts, side, price, size, tx_hash
-       from fills
-       ${whereSql}
-       order by twap_id nulls last, ts asc
-       limit $${params.length - 1} offset $${params.length}`,
+      `select distinct twap_id from fills ${whereSql} order by twap_id asc limit $${params.length - 1} offset $${params.length}`,
       params,
     );
     return rows as any[];
   });
-  const hasMore = rows.length > limit;
-  if (hasMore) rows.pop();
+  const hasMore = twapIds.length > limit;
+  if (hasMore) twapIds.pop();
+
+  if (twapIds.length === 0) {
+    return json({
+      body: {
+        data: [],
+        pagination: { limit, offset, has_more: false },
+      },
+    });
+  }
+
+  const ids = twapIds.map((r: any) => r.twap_id);
+  const fillRows = await withClient(async (c) => {
+    const { rows } = await c.query(
+      `select twap_id, wallet, asset, ts, side, price, size, tx_hash
+       from fills
+       where twap_id = any($1)
+       order by twap_id, ts asc`,
+      [ids],
+    );
+    return rows as any[];
+  });
 
   type FillRow = {
-    twap_id: string | null;
+    twap_id: string;
     wallet: string | null;
     asset: string | null;
     ts: string | null;
@@ -115,9 +128,8 @@ async function handleTwaps(url: URL): Promise<Response> {
   };
 
   const groups = new Map<string, any>();
-  for (const r of rows as FillRow[]) {
-    const gid = r.twap_id ?? "__ungrouped";
-    const g = groups.get(gid) ?? {
+  for (const r of fillRows as FillRow[]) {
+    const g = groups.get(r.twap_id) ?? {
       twapId: r.twap_id,
       wallet: r.wallet,
       asset: r.asset,
@@ -126,10 +138,12 @@ async function handleTwaps(url: URL): Promise<Response> {
     const price = r.price != null ? Number(r.price) : null;
     const size = r.size != null ? Number(r.size) : null;
     g.fills.push({ ts: r.ts, side: r.side, price, size, txHash: r.tx_hash });
-    groups.set(gid, g);
+    groups.set(r.twap_id, g);
   }
 
-  const out = Array.from(groups.values()).map((g) => {
+  const out = ids.map((id) => {
+    const g = groups.get(id);
+    if (!g) return null;
     const prices = g.fills.map((f: any) => f.price).filter((n: number | null) => n != null) as number[];
     const sizes = g.fills.map((f: any) => f.size).filter((n: number | null) => n != null) as number[];
     const tses = g.fills.map((f: any) => (f.ts ? new Date(f.ts) : null)).filter(Boolean) as Date[];
@@ -152,7 +166,7 @@ async function handleTwaps(url: URL): Promise<Response> {
       endTs,
       fills: g.fills,
     };
-  });
+  }).filter(Boolean);
 
   return json({
     body: {
