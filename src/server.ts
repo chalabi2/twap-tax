@@ -87,23 +87,21 @@ async function handleTwaps(url: URL): Promise<Response> {
     where.push("twap_id is not null");
   }
   const whereSql = where.length ? `where ${where.join(" and ")}` : "";
-  const countParams = [...params];
-  params.push(limit, offset);
+  params.push(limit + 1, offset);
 
-  const [rows, totalCount] = await withClient(async (c) => {
-    const [dataRes, countRes] = await Promise.all([
-      c.query(
-        `select twap_id, wallet, asset, ts, side, price, size, tx_hash
-         from fills
-         ${whereSql}
-         order by twap_id nulls last, ts asc
-         limit $${params.length - 1} offset $${params.length}`,
-        params,
-      ),
-      c.query(`select count(*)::bigint as cnt from fills ${whereSql}`, countParams),
-    ]);
-    return [dataRes.rows as any[], Number(countRes.rows[0]?.cnt || 0)];
+  const rows = await withClient(async (c) => {
+    const { rows } = await c.query(
+      `select twap_id, wallet, asset, ts, side, price, size, tx_hash
+       from fills
+       ${whereSql}
+       order by twap_id nulls last, ts asc
+       limit $${params.length - 1} offset $${params.length}`,
+      params,
+    );
+    return rows as any[];
   });
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.pop();
 
   type FillRow = {
     twap_id: string | null;
@@ -162,8 +160,7 @@ async function handleTwaps(url: URL): Promise<Response> {
       pagination: {
         limit,
         offset,
-        total: totalCount,
-        has_more: offset + limit < totalCount,
+        has_more: hasMore,
       },
     },
   });
@@ -210,6 +207,7 @@ async function handleTwapById(id: string): Promise<Response> {
 const server = Bun.serve({
   port: Number(process.env["PORT"] ?? 3000),
   hostname: process.env["HOST"] ?? "0.0.0.0",
+  development: false,
   fetch: async (req) => {
     const url = new URL(req.url);
     if (url.pathname === "/trades") {
@@ -253,22 +251,20 @@ const server = Bun.serve({
         where.push(`ts <= $${params.length}`);
       }
       const whereSql = where.length ? `where ${where.join(" and ")}` : "";
-      const countParams = [...params];
-      params.push(limit, offset);
-      const [rows, totalCount] = await withClient(async (c) => {
-        const [dataRes, countRes] = await Promise.all([
-          c.query(
-            `select id, twap_id, wallet, ts, asset, size, price, side, fee
-             from fills
-             ${whereSql}
-             order by ts asc
-             limit $${params.length - 1} offset $${params.length}`,
-            params,
-          ),
-          c.query(`select count(*)::bigint as cnt from fills ${whereSql}`, countParams),
-        ]);
-        return [dataRes.rows as any[], Number(countRes.rows[0]?.cnt || 0)];
+      params.push(limit + 1, offset);
+      const rows = await withClient(async (c) => {
+        const { rows } = await c.query(
+          `select id, twap_id, wallet, ts, asset, size, price, side, fee
+           from fills
+           ${whereSql}
+           order by ts asc
+           limit $${params.length - 1} offset $${params.length}`,
+          params,
+        );
+        return rows as any[];
       });
+      const hasMore = rows.length > limit;
+      if (hasMore) rows.pop();
       const out = rows.map((r: any) => ({
         id: Number(r.id),
         twap_id: r.twap_id,
@@ -287,8 +283,7 @@ const server = Bun.serve({
           pagination: {
             limit,
             offset,
-            total: totalCount,
-            has_more: offset + limit < totalCount,
+            has_more: hasMore,
           },
         },
       });
@@ -305,17 +300,16 @@ const server = Bun.serve({
       let offset = q["offset"] ? Number(q["offset"]) : 0;
       if (!Number.isFinite(offset) || offset < 0) offset = 0;
 
-      const [rows, totalCount] = await withClient(async (c) => {
-        const [dataRes, countRes] = await Promise.all([
-          c.query(
-            `select id, twap_id, wallet, ts, asset, size, price, side, fee from fills where twap_id = $1 order by ts asc limit $2 offset $3`,
-            [id, limit, offset],
-          ),
-          c.query(`select count(*)::bigint as cnt from fills where twap_id = $1`, [id]),
-        ]);
-        return [dataRes.rows as any[], Number(countRes.rows[0]?.cnt || 0)];
+      const rows = await withClient(async (c) => {
+        const { rows } = await c.query(
+          `select id, twap_id, wallet, ts, asset, size, price, side, fee from fills where twap_id = $1 order by ts asc limit $2 offset $3`,
+          [id, limit + 1, offset],
+        );
+        return rows as any[];
       });
-      if (totalCount === 0) return json({ status: 404, body: { error: "Not found" } });
+      if (rows.length === 0) return json({ status: 404, body: { error: "Not found" } });
+      const hasMore = rows.length > limit;
+      if (hasMore) rows.pop();
       const sizes = rows.map((r: any) => (r.size != null ? Number(r.size) : 0));
       const prices = rows.map((r: any) => (r.price != null ? Number(r.price) : 0));
       const vol = sizes.reduce((a, b) => a + b, 0);
@@ -336,15 +330,13 @@ const server = Bun.serve({
       return json({
         body: {
           twap_id: id,
-          total_trades: totalCount,
           total_volume: vol,
           avg_price: avgPrice,
           trades,
           pagination: {
             limit,
             offset,
-            total: totalCount,
-            has_more: offset + limit < totalCount,
+            has_more: hasMore,
           },
         },
       });
