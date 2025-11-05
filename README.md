@@ -1,6 +1,10 @@
 # twap-tax
 
-API and ETL for Hyperliquid trade fills, grouped by TWAP order IDs.
+API and ETL for Hyperliquid trade fills, grouped by TWAP order IDs. You can test the API @ [https://twap-backend.jchalabi.xyz/](https://twap-backend.jchalabi.xyz/). No authentication is required. An example query is:
+
+```bash
+curl 'https://twap-backend.jchalabi.xyz/twaps?wallet=0x5b5d51203a0f9079f8aeb098a6523a13f298c060&limit=10'
+```
 
 ## Setup
 
