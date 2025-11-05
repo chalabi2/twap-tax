@@ -1,166 +1,256 @@
 # twap-tax
 
-ETL + API for Hyperliquid TWAP-related fills.
+API and ETL for Hyperliquid trade fills, grouped by TWAP order IDs.
 
-- Pulls historical fills from S3 requester-pays buckets to a local Postgres database
-- Decompresses `.lz4` assets using `unlz4`
-- Exposes a lightweight HTTP API via Bun to query TWAPs by wallet/timeframe, grouped by `twap_id`
+## Setup
 
-## Prerequisites
+**Prerequisites:**
 
-- Bun (`brew install bun`)
-- Postgres running locally (default: `postgres://localhost:5432/twap_tax`)
-- AWS CLI (`brew install awscli`) configured with credentials
-- LZ4 CLI (`brew install lz4`) for `unlz4`
+- Bun
+- PostgreSQL
+- AWS CLI (configured)
+- lz4 (`apt install liblz4-tool` or `brew install lz4`)
 
-## Configuration
+Ensure you have your AWS credentials for your IAM user with S3 permissions. This is required to pull the fills from S3 bucket provided by Hyperliquid.
 
-Environment variables:
+**Install:**
 
-- `DATABASE_URL` (default: `postgres://localhost:5432/twap_tax`)
-- `PORT` (default: `3000`)
-- `AWS_REQUEST_PAYER` (default: `requester`)
-- `HL_S3_FILLS_PREFIX` (default: `s3://hl-mainnet-node-data/node_fills_by_block`)
-- `DATA_TMP_DIR` optional temp directory for downloads
-
-fish shell example:
-
-```fish
-set -x DATABASE_URL postgres://localhost:5432/twap_tax
-set -x AWS_REQUEST_PAYER requester
-set -x HL_S3_FILLS_PREFIX s3://hl-mainnet-node-data/node_fills_by_block
-```
-
-## Install deps
-
-```fish
+```bash
 bun install
+createdb twap_tax
+bun run migrate
 ```
 
-## Database setup
+**Environment (.env):**
 
-Create the database if missing and run migrations:
-
-```fish
-createdb twap_tax ^/dev/null; and echo ok
-bun run src/db/migrate.ts
+```bash
+DATABASE_URL="postgresql://postgres@localhost:5432/twap_tax"
+PORT=3000
+API_KEY=your-secret-key-here  # Optional: omit to disable auth
+AWS_REQUEST_PAYER=requester
+HL_S3_FILLS_PREFIX=s3://hl-mainnet-node-data/node_fills_by_block/hourly
+AWS_CLI_PATH=/opt/homebrew/bin/aws
+UNLZ4_PATH=/opt/homebrew/bin/unlz4
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_REGION=us-east-1
+BULK_INSERT_CHUNK_SIZE=1000
+INGEST_CONCURRENCY=6
+MAX_BLOCKS=0 # 0 = all blocks
+BACKFILL_DAYS=180
 ```
 
-## Run ETL (daily)
+**Note:** If `API_KEY` is not set, all endpoints are public. If set, all endpoints except `/healthz` and `/` require the `X-API-Key` header.
 
-Run for a specific day (defaults to yesterday if no arg). Date can be `YYYY-MM-DD` or `YYYYMMDD`.
+## Usage
 
-```fish
-# Yesterday
-bun run src/etl/run_daily.ts
+**Start API:**
+
+```bash
+bun run dev
+```
+
+**Load data:**
+
+```bash
+# Last 180 days (one-time backfill)
+bun run etl:backfill
 
 # Specific day
-bun run src/etl/run_day.ts 2025-11-01
+bun run etl:day 2025-11-01
+
+# Yesterday (for daily cron)
+bun run etl:daily
 ```
 
-Notes:
+## API Endpoints
 
-- This uses `aws s3 cp --recursive --request-payer requester` under the hood
-- It will automatically `unlz4 --rm` any downloaded `.lz4` files
-- An ingestion watermark table prevents duplicate inserts per file
+**Authentication:** Set `API_KEY` in `.env` to require `X-API-Key` header. If not set, all endpoints are public.
 
-## API
+All list endpoints are paginated (max 100 per page).
 
-Start server:
+### GET /trades
 
-```fish
-bun run src/server.ts
+Get individual trade fills with filters.
+
+```bash
+# With API key
+curl -H "X-API-Key: xxx" \
+  'http://localhost:3000/trades?wallet_addresses=0xabc,0xdef&asset=ETH&limit=50&offset=0'
+
+# Without auth (if API_KEY not configured)
+curl 'https://twap-backend.jchalabi.xyz/trades?wallet_addresses=0xabc,0xdef&asset=ETH&limit=50'
 ```
 
-Endpoints:
+**Query params:** `wallet_addresses` (comma-separated), `asset`, `twap_id`, `start_date`, `end_date`, `limit`, `offset`
 
-- `GET /healthz` – health check
-- `GET /twaps?wallet=<WALLET>&start=<ISO>&end=<ISO>&asset=<COIN>&includeUngrouped=1` – grouped by `twap_id`
-- `GET /twaps/<twapId>` – details for a single TWAP id
-
-Examples:
-
-```fish
-curl 'http://localhost:3000/twaps?wallet=0xabc...&start=2025-11-01T00:00:00Z&end=2025-11-02T00:00:00Z'
-curl 'http://localhost:3000/twaps/some-twap-id'
-```
-
-Response shape (example):
+**Response:**
 
 ```json
-[
-  {
-    "twapId": "abcd-1234",
-    "wallet": "0xabc...",
-    "asset": "ETH",
-    "fillsCount": 12,
-    "totalSize": 42.5,
-    "avgPrice": 3450.12,
-    "minPrice": 3420.0,
-    "maxPrice": 3475.5,
-    "startTs": "2025-11-01T00:05:00.000Z",
-    "endTs": "2025-11-01T01:35:00.000Z",
-    "fills": [
-      {
-        "ts": "2025-11-01T00:05:00Z",
-        "side": "buy",
-        "price": 3430.5,
-        "size": 2.0,
-        "txHash": "0x..."
-      }
-    ]
+{
+  "data": [
+    {
+      "id": 123,
+      "twap_id": "abc-123",
+      "wallet_address": "0xabc...",
+      "timestamp": "2025-11-01T12:00:00Z",
+      "asset": "ETH",
+      "quantity": 1.5,
+      "price": 3500.0,
+      "side": "buy",
+      "fee": 0.05,
+      "exchange": "hyperliquid"
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "total": 1523,
+    "has_more": true
   }
-]
+}
 ```
 
-## Production (no containers)
+### GET /twaps
 
-Minimal steps on a server:
+Get TWAPs grouped by `twap_id` with aggregated stats.
 
-```fish
-# 1) Clone and enter repo
-git clone <your-repo-url> twap-tax; and cd twap-tax
+```bash
+curl -H "X-API-Key: xxx" \
+  'http://localhost:3000/twaps?wallet=0x5b5d51203a0f9079f8aeb098a6523a13f298c060&asset=ETH'
+```
 
-# 2) Create .env
-cp .env.example .env; and edit .env
+**Query params:**
 
-# 3) Install & migrate
-bun install
-bun run migrate
+- `wallet` - Filter by wallet address
+- `asset` - Filter by asset symbol
+- `start` - Start date (ISO 8601)
+- `end` - End date (ISO 8601)
+- `includeUngrouped` - Set to `1` to include fills without a `twap_id` (default: `0`, excludes non-TWAP fills)
+- `limit`, `offset` - Pagination
 
-# 4) Build and run
+**Response:**
+
+```json
+{
+  "data": [
+    {
+      "twapId": "abc-123",
+      "wallet": "0x5b5d...",
+      "asset": "ETH",
+      "fillsCount": 12,
+      "totalSize": 42.5,
+      "avgPrice": 3450.12,
+      "minPrice": 3420.0,
+      "maxPrice": 3475.5,
+      "startTs": "2025-11-01T00:05:00.000Z",
+      "endTs": "2025-11-01T01:35:00.000Z",
+      "fills": [
+        {
+          "ts": "2025-11-01T00:05:00Z",
+          "side": "B",
+          "price": 3430.5,
+          "size": 2.0,
+          "txHash": "0x..."
+        }
+      ]
+    }
+  ],
+  "pagination": { "limit": 100, "offset": 0, "total": 15, "has_more": false }
+}
+```
+
+### GET /twap/{twap_id}
+
+Get all trades for a specific TWAP order with aggregated metrics.
+
+```bash
+curl -H "X-API-Key: xxx" \
+  'http://localhost:3000/twap/abc-123?limit=100&offset=0'
+```
+
+**Query params:** `limit`, `offset`
+
+**Response:**
+
+```json
+{
+  "twap_id": "abc-123",
+  "total_trades": 45,
+  "total_volume": 67.5,
+  "avg_price": 3485.2,
+  "trades": [...],
+  "pagination": { "limit": 100, "offset": 0, "total": 45, "has_more": false }
+}
+```
+
+### GET /status
+
+System status and ingestion info.
+
+```bash
+curl -H "X-API-Key: xxx" http://localhost:3000/status
+```
+
+**Response:**
+
+```json
+{
+  "last_ingestion": "2025-11-03T14:23:45Z",
+  "total_records": 7655360,
+  "status": "success",
+  "last_error": null
+}
+```
+
+### GET /coverage
+
+Data coverage information (first/last date, total days).
+
+```bash
+curl -H "X-API-Key: xxx" http://localhost:3000/coverage
+```
+
+**Response:**
+
+```json
+{
+  "first_date": "2025-05-06",
+  "last_date": "2025-11-03",
+  "days_with_data": 180,
+  "total_fills": 7655360
+}
+```
+
+### GET /healthz
+
+Health check (no auth required).
+
+```bash
+curl http://localhost:3000/healthz
+```
+
+**Response:**
+
+```json
+{ "ok": true }
+```
+
+### GET /
+
+Simple root endpoint. Returns "OK" with status 200 (no auth required).
+
+## Production Deployment
+
+See `deploy/README.md` for systemd service setup.
+
+**Quick start:**
+
+```bash
 bun run build
-bun run start
+sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
+sudo systemctl enable --now twap-tax-api
+sudo systemctl enable --now twap-tax-etl.timer
 ```
 
-Daily ETL via cron (uses built artifact and loads .env):
-
-```bash
-0 3 * * * bash -lc 'cd /Users/chalabi/Code/twap-tax && bun run etl:daily:built >> /Users/chalabi/Code/twap-tax/etl.log 2>&1'
-```
-
-Notes:
-
-- `bun run start` executes `dist/server.js` with `--env-file .env`.
-- `bun run etl:daily:built` executes `dist/etl/run_daily.js` with `--env-file .env`.
-
-## Cron (daily)
-
-Example crontab entry (runs at 03:00 UTC daily):
-
-```bash
-# Edit crontab
-crontab -e
-
-# Add line (adjust env as needed)
-0 3 * * * bash -c 'export DATABASE_URL=postgres://localhost:5432/twap_tax && export AWS_REQUEST_PAYER=requester && export HL_S3_FILLS_PREFIX=s3://hl-mainnet-node-data/node_fills_by_block && cd /Users/chalabi/Code/twap-tax && bun run src/etl/run_daily.ts >> /Users/chalabi/Code/twap-tax/etl.log 2>&1'
-```
-
-## Notes on data sources
-
-- Hyperliquid historical market data (e.g., L2 books) lives at `s3://hyperliquid-archive/market_data/...` and is `.lz4` compressed
-- Trade fills streamed by block: `s3://hl-mainnet-node-data/node_fills_by_block`
-- Older formats: `s3://hl-mainnet-node-data/node_fills` and `node_trades`
-- Explorer/tx data: `s3://hl-mainnet-node-data/explorer_blocks` and `replica_cmds`
-
-This ETL focuses on `node_fills_by_block`. The parser attempts to derive `twap_id` from common fields (`twapId`, `parentOrderId`, etc.). If the actual structure differs, adjust the field mapping in `src/etl/parse_fill.ts`.
+The timer runs daily ETL at 2 AM automatically.

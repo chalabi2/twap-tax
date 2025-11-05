@@ -349,58 +349,6 @@ const server = Bun.serve({
         },
       });
     }
-    if (url.pathname.startsWith("/wallets/") && url.pathname.endsWith("/twaps")) {
-      const authErr = requireApiKey(req);
-      if (authErr) return authErr;
-      const parts = url.pathname.split("/");
-      const wallet = parts[2] ?? "";
-      if (!wallet) return badRequest("Missing wallet_address");
-      const q = parseQuery(url);
-      const start = parseDate(q["start_date"]);
-      const end = parseDate(q["end_date"]);
-      let limit = q["limit"] ? Number(q["limit"]) : 100;
-      if (!Number.isFinite(limit) || limit < 1) limit = 1;
-      if (limit > 100) limit = 100;
-      let offset = q["offset"] ? Number(q["offset"]) : 0;
-      if (!Number.isFinite(offset) || offset < 0) offset = 0;
-
-      const params: any[] = [wallet];
-      const where: string[] = ["wallet = $1", "twap_id is not null"];
-      if (start) {
-        params.push(start.toISOString());
-        where.push(`ts >= $${params.length}`);
-      }
-      if (end) {
-        params.push(end.toISOString());
-        where.push(`ts <= $${params.length}`);
-      }
-      const countParams = [...params];
-      params.push(limit, offset);
-      const [rows, totalCount] = await withClient(async (c) => {
-        const [dataRes, countRes] = await Promise.all([
-          c.query(
-            `select distinct twap_id from fills where ${where.join(" and ")} order by twap_id asc limit $${params.length - 1} offset $${params.length}`,
-            params,
-          ),
-          c.query(
-            `select count(distinct twap_id)::bigint as cnt from fills where ${where.join(" and ")}`,
-            countParams,
-          ),
-        ]);
-        return [dataRes.rows as any[], Number(countRes.rows[0]?.cnt || 0)];
-      });
-      return json({
-        body: {
-          data: rows.map((r: any) => r.twap_id),
-          pagination: {
-            limit,
-            offset,
-            total: totalCount,
-            has_more: offset + limit < totalCount,
-          },
-        },
-      });
-    }
     if (url.pathname === "/status") {
       const authErr = requireApiKey(req);
       if (authErr) return authErr;
@@ -416,13 +364,31 @@ const server = Bun.serve({
       });
       return json({ body: status });
     }
+    if (url.pathname === "/coverage") {
+      const authErr = requireApiKey(req);
+      if (authErr) return authErr;
+      const coverage = await withClient(async (c) => {
+        const result = await c.query(`
+          select 
+            min(date(ts)) as first_date,
+            max(date(ts)) as last_date,
+            count(distinct date(ts)) as days_with_data,
+            count(*)::bigint as total_fills
+          from fills
+          where ts is not null
+        `);
+        const row = result.rows[0];
+        return {
+          first_date: row?.first_date || null,
+          last_date: row?.last_date || null,
+          days_with_data: Number(row?.days_with_data || 0),
+          total_fills: Number(row?.total_fills || 0),
+        };
+      });
+      return json({ body: coverage });
+    }
     if (url.pathname === "/healthz") return handleHealth();
     if (url.pathname === "/twaps") return handleTwaps(url);
-    if (url.pathname.startsWith("/twaps/")) {
-      const id = url.pathname.split("/")[2] ?? "";
-      if (!id) return badRequest("Missing twapId");
-      return handleTwapById(id);
-    }
     if (url.pathname === "/") {
       return new Response("OK", { status: 200 });
     }
