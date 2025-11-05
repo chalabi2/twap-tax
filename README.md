@@ -105,7 +105,6 @@ curl 'https://twap-backend.jchalabi.xyz/trades?wallet_addresses=0xabc,0xdef&asse
   "pagination": {
     "limit": 50,
     "offset": 0,
-    "total": 1523,
     "has_more": true
   }
 }
@@ -156,7 +155,7 @@ curl -H "X-API-Key: xxx" \
       ]
     }
   ],
-  "pagination": { "limit": 100, "offset": 0, "total": 15, "has_more": false }
+  "pagination": { "limit": 100, "offset": 0, "has_more": false }
 }
 ```
 
@@ -176,11 +175,10 @@ curl -H "X-API-Key: xxx" \
 ```json
 {
   "twap_id": "abc-123",
-  "total_trades": 45,
   "total_volume": 67.5,
   "avg_price": 3485.2,
   "trades": [...],
-  "pagination": { "limit": 100, "offset": 0, "total": 45, "has_more": false }
+  "pagination": { "limit": 100, "offset": 0, "has_more": false }
 }
 ```
 
